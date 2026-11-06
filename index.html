@@ -3,704 +3,133 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>設備借用與歸還管理系統</title>
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <!-- FontAwesome Icons -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <!-- Google Fonts - Inter -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <title>設備掃描借還系統</title>
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
   <style>
-    body {
-      font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    }
-    .custom-scrollbar::-webkit-scrollbar {
-      width: 6px;
-      height: 6px;
-    }
-    .custom-scrollbar::-webkit-scrollbar-track {
-      background: #f1f5f9;
-      border-radius: 4px;
-    }
-    .custom-scrollbar::-webkit-scrollbar-thumb {
-      background: #cbd5e1;
-      border-radius: 4px;
-    }
-    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-      background: #94a3b8;
-    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; text-align: center; padding: 20px; background-color: #f8f9fa; }
+    .card { max-width: 480px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); }
+    h2 { margin-top: 0; color: #333; }
+    
+    /* 模式切換按鈕 */
+    .mode-switch { display: flex; gap: 10px; margin-bottom: 15px; }
+    .mode-btn { flex: 1; padding: 12px; font-size: 16px; font-weight: bold; border: 2px solid #0d6efd; border-radius: 8px; background: white; color: #0d6efd; cursor: pointer; transition: 0.2s; }
+    .mode-btn.active-borrow { background: #0d6efd; color: white; }
+    .mode-btn.active-return { background: #198754; border-color: #198754; color: white; }
+
+    #camera-select { margin-bottom: 15px; padding: 8px; font-size: 15px; border-radius: 6px; border: 1px solid #ccc; width: 100%; }
+    #reader { width: 100%; background: black; border-radius: 8px; overflow: hidden; }
+    #result { margin-top: 20px; font-size: 18px; font-weight: bold; color: #333; white-space: pre-wrap; line-height: 1.5; min-height: 60px; padding: 10px; border-radius: 6px; background: #f1f3f5; }
   </style>
 </head>
-<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col">
+<body>
 
-  <!-- Header 導覽列 -->
-  <header class="bg-slate-900 text-white shadow-lg sticky top-0 z-50">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="flex items-center justify-between h-16">
-        <!-- Logo & Title -->
-        <div class="flex items-center space-x-3">
-          <div class="bg-indigo-600 p-2 rounded-lg text-white">
-            <i class="fa-solid me-0 fa-boxes-packing text-xl"></i>
-          </div>
-          <div>
-            <h1 class="text-lg sm:text-xl font-bold tracking-tight text-white">設備借用與歸還管理系統</h1>
-            <p class="text-xs text-slate-400 hidden sm:block">Google Apps Script 整合前端系統</p>
-          </div>
-        </div>
+<div class="card">
+  <h2>📷 設備掃描借還系統</h2>
 
-        <!-- Tab Switches -->
-        <nav class="flex space-x-1 sm:space-x-2 bg-slate-800 p-1 rounded-xl">
-          <button id="tab-frontend-btn" onclick="switchTab('frontend')" 
-            class="flex items-center space-x-2 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 bg-indigo-600 text-white shadow-sm">
-            <i class="fa-solid fa-desktop"></i>
-            <span>前台操作</span>
-          </button>
-          <button id="tab-backend-btn" onclick="switchTab('backend')" 
-            class="flex items-center space-x-2 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 text-slate-300 hover:text-white hover:bg-slate-700">
-            <i class="fa-solid fa-code"></i>
-            <span>後台 GAS 程式碼</span>
-          </button>
-        </nav>
-      </div>
-    </div>
-  </header>
-
-  <!-- 主要內容區 -->
-  <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
-
-    <!-- ================= 前台頁面 (FRONTEND) ================= -->
-    <div id="page-frontend" class="space-y-6">
-      
-      <!-- API 設定與模式切換列 -->
-      <div class="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-slate-200/80">
-        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div class="flex items-center space-x-3">
-            <span class="text-sm font-semibold text-slate-700 flex items-center gap-2">
-              <i class="fa-solid fa-gears text-indigo-500"></i> 運作模式：
-            </span>
-            <label class="inline-flex items-center cursor-pointer">
-              <input type="checkbox" id="mode-toggle" class="sr-only peer" onchange="toggleApiMode()">
-              <div class="relative w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-              <span id="mode-label" class="ms-3 text-xs sm:text-sm font-medium text-amber-600 bg-amber-50 px-2.5 py-1 rounded-md border border-amber-200">
-                前端模擬模式 (Mock Sheet)
-              </span>
-            </label>
-          </div>
-
-          <!-- GAS API URL 輸入框 -->
-          <div id="gas-url-container" class="hidden flex-1 max-w-2xl">
-            <div class="relative rounded-lg shadow-sm">
-              <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                <i class="fa-solid fa-link text-slate-400 text-xs"></i>
-              </div>
-              <input type="text" id="gas-url-input" 
-                placeholder="請輸入 Google Apps Script Web App URL (https://script.google.com/macros/s/.../exec)" 
-                class="block w-full rounded-lg border border-slate-300 pl-9 pr-24 py-2 text-xs sm:text-sm focus:border-indigo-500 focus:ring-indigo-500 text-slate-900">
-              <button onclick="saveGasUrl()" class="absolute right-1 top-1 bottom-1 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-md border border-indigo-200 transition">
-                儲存網址
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 操作主區域：兩欄式佈局 -->
-      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        <!-- 左側：借還操作面板 (5欄) -->
-        <div class="lg:col-span-5 space-y-6">
-          <div class="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-5 sm:p-6">
-            <h2 class="text-base font-bold text-slate-900 mb-4 flex items-center gap-2">
-              <i class="fa-solid fa-hand-holding-hand text-indigo-600"></i>
-              設備借還快速操作
-            </h2>
-
-            <!-- 動作模式按鈕切換 (借用 / 歸還) -->
-            <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl mb-5">
-              <button id="action-borrow-btn" onclick="setAction('borrow')" 
-                class="py-2.5 px-4 rounded-lg text-sm font-bold transition-all duration-200 bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-2">
-                <i class="fa-solid fa-arrow-right-from-bracket"></i>
-                <span>設備借用</span>
-              </button>
-              <button id="action-return-btn" onclick="setAction('return')" 
-                class="py-2.5 px-4 rounded-lg text-sm font-bold transition-all duration-200 text-slate-600 hover:text-slate-900 flex items-center justify-center gap-2">
-                <i class="fa-solid fa-rotate-left"></i>
-                <span>設備歸還</span>
-              </button>
-            </div>
-
-            <!-- 輸入表單 -->
-            <form onsubmit="handleFormSubmit(event)" class="space-y-4">
-              <div>
-                <label for="equipment-id-input" class="block text-xs font-semibold text-slate-600 mb-1">
-                  設備 ID / 編號
-                </label>
-                <div class="relative">
-                  <input type="text" id="equipment-id-input" required placeholder="請輸入或點選設備 ID (如: 1001)"
-                    class="w-full pl-9 pr-4 py-2.5 text-sm font-mono text-slate-900 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition">
-                  <i class="fa-solid fa-barcode absolute left-3 top-3.5 text-slate-400"></i>
-                </div>
-              </div>
-
-              <!-- 動作提交按鈕 -->
-              <button type="submit" id="submit-btn" 
-                class="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition duration-200 flex items-center justify-center gap-2 text-sm">
-                <i class="fa-solid fa-paper-plane"></i>
-                <span id="submit-btn-text">執行「設備借用」</span>
-              </button>
-            </form>
-
-            <!-- 提示與快速測試按鈕 -->
-            <div class="mt-6 pt-4 border-t border-slate-100">
-              <p class="text-xs font-semibold text-slate-500 mb-2">快速點擊測試：</p>
-              <div class="flex flex-wrap gap-1.5" id="quick-id-buttons">
-                <!-- 由 JS 動態生成快速按鈕 -->
-              </div>
-            </div>
-          </div>
-
-          <!-- 操作日誌 (Log Console) -->
-          <div class="bg-slate-900 rounded-2xl shadow-sm p-5 text-slate-200">
-            <div class="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
-              <span class="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-                <i class="fa-solid fa-terminal text-indigo-400"></i> 操作系統日誌 (Log Console)
-              </span>
-              <button onclick="clearLogs()" class="text-xs text-slate-500 hover:text-slate-300 transition">
-                清除紀錄
-              </button>
-            </div>
-            <div id="log-console" class="h-44 overflow-y-auto custom-scrollbar space-y-2 text-xs font-mono pr-1">
-              <div class="text-slate-500 italic">[System] 系統初始化完成，準備就緒。</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 右側：即時設備清單對照 (7欄) -->
-        <div class="lg:col-span-7">
-          <div class="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-5 sm:p-6 h-full flex flex-col">
-            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
-              <div>
-                <h2 class="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <i class="fa-solid fa-list-check text-indigo-600"></i>
-                  即時設備狀態清單 (Equipment Sheet)
-                </h2>
-                <p class="text-xs text-slate-500">試算表名稱: Equipment_List (即時模擬/對照)</p>
-              </div>
-              <button onclick="resetMockData()" class="self-start sm:self-auto text-xs px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg transition font-medium flex items-center gap-1">
-                <i class="fa-solid fa-rotate"></i> 重置模擬資料
-              </button>
-            </div>
-
-            <!-- Table Container -->
-            <div class="overflow-x-auto custom-scrollbar flex-1 border border-slate-100 rounded-xl">
-              <table class="w-full text-left border-collapse text-xs sm:text-sm">
-                <thead>
-                  <tr class="bg-slate-100/80 text-slate-600 font-semibold border-b border-slate-200">
-                    <th class="py-3 px-3">設備 ID (A)</th>
-                    <th class="py-3 px-3">名稱 (B)</th>
-                    <th class="py-3 px-3 text-center">狀態 (C)</th>
-                    <th class="py-3 px-3">廠牌 (E)</th>
-                    <th class="py-3 px-3">保管/備註 (D)</th>
-                  </tr>
-                </thead>
-                <tbody id="equipment-table-body" class="divide-y divide-slate-100 text-slate-700">
-                  <!-- JS 動態繪製表格內容 -->
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-      </div>
-    </div>
-
-
-    <!-- ================= 後台程式碼頁面 (BACKEND) ================= -->
-    <div id="page-backend" class="hidden space-y-6">
-      
-      <!-- 簡介與說明 -->
-      <div class="bg-gradient-to-r from-indigo-900 to-slate-900 rounded-2xl p-6 text-white shadow-md">
-        <div class="flex items-start justify-between">
-          <div>
-            <h2 class="text-xl font-bold mb-2 flex items-center gap-2">
-              <i class="fa-solid fa-server text-indigo-400"></i>
-              Google Apps Script (GAS) 後台後端程式碼
-            </h2>
-            <p class="text-sm text-slate-300 max-w-3xl">
-              請將下方獨立撰寫的 App Script 貼入您的 Google 試算表擴充功能 (Apps Script) 中，即可自動處理「借用」與「歸還」動作，並回傳標準文字與狀態訊息。
-            </p>
-          </div>
-          <button onclick="copyGasCode()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-4 py-2.5 rounded-xl shadow transition text-xs sm:text-sm flex items-center gap-2">
-            <i class="fa-regular fa-copy"></i>
-            <span>複製 GAS 程式碼</span>
-          </button>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        <!-- 左側：GAS 代碼展示 (8欄) -->
-        <div class="lg:col-span-8 space-y-4">
-          <div class="bg-slate-900 rounded-2xl shadow-sm border border-slate-800 overflow-hidden">
-            <div class="bg-slate-800/80 px-4 py-3 flex items-center justify-between border-b border-slate-700">
-              <span class="text-xs font-mono font-bold text-slate-300">Code.gs</span>
-              <span class="text-xs text-indigo-400 bg-indigo-950/60 border border-indigo-800/50 px-2 py-0.5 rounded">Apps Script JavaScript</span>
-            </div>
-            <pre class="p-4 text-xs sm:text-sm font-mono text-emerald-400 overflow-x-auto custom-scrollbar leading-relaxed" id="gas-code-block"><code>/**
- * 設備借銷與歸還管理系統 - Google Apps Script (GAS) 後端
- * 工作表名稱預設為：Equipment_List
- */
-
-function doGet(e) {
-  var equipmentId = e.parameter.id;
-  var action = e.parameter.action || "borrow"; // 預設動作為借用 (borrow)，歸還為 (return)
-
-  if (!equipmentId) {
-    return ContentService.createTextOutput("請提供設備 ID，例如：?action=borrow&id=1001");
-  }
-
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  // 請確認您的試算表工作表名稱是 Equipment_List
-  var sheet = ss.getSheetByName("Equipment_List");
-  if (!sheet) {
-    return ContentService.createTextOutput("錯誤：找不到名為 'Equipment_List' 的工作表！");
-  }
-
-  var data = sheet.getDataRange().getValues();
-
-  for (var i = 1; i < data.length; i++) {
-    // 比對 A 欄 (索引 0) 的設備編號
-    if (String(data[i][0]).trim() === String(equipmentId).trim()) {
-      
-      var currentStatus = String(data[i][2]).trim(); // C 欄 (索引 2) 狀態
-      var eqName = data[i][1];                      // B 欄 (索引 1) 名稱
-      var eqBrand = data[i][4];                     // E 欄 (索引 4) 廠牌
-
-      // =============== 動作 1: 設備歸還 (RETURN) ===============
-      if (action === "return") {
-        if (currentStatus === "借出中") {
-          // 更新 C 欄 (在 getRange 中，C 欄是第 3 欄)
-          sheet.getRange(i + 1, 3).setValue("可借用");
-          return ContentService.createTextOutput(
-            "歸還成功！\n" + eqBrand + " " + eqName + " 狀態已更新為「可借用」。"
-          );
-        } else {
-          return ContentService.createTextOutput(
-            "歸還失敗！該設備目前狀態為：" + currentStatus + "（非借出中狀態）"
-          );
-        }
-      } 
-      
-      // =============== 動作 2: 設備借用 (BORROW) ===============
-      else {
-        if (currentStatus === "可借用") {
-          // 更新 C 欄為 借出中
-          sheet.getRange(i + 1, 3).setValue("借出中");
-          return ContentService.createTextOutput(
-            "借用成功！\n" + eqBrand + " " + eqName + " 狀態已更新為「借出中」。"
-          );
-        } else {
-          return ContentService.createTextOutput(
-            "借用失敗！該設備目前狀態為：" + currentStatus
-          );
-        }
-      }
-
-    }
-  }
-
-  return ContentService.createTextOutput("找不到設備編號：" + equipmentId);
-}
-</code></pre>
-          </div>
-        </div>
-
-        <!-- 右側：設定教學 (4欄) -->
-        <div class="lg:col-span-4 space-y-5">
-          
-          <!-- 步驟教學 1: Google 試算表結構 -->
-          <div class="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm">
-            <h3 class="text-sm font-bold text-slate-900 mb-3 flex items-center gap-2">
-              <span class="w-5 h-5 bg-indigo-100 text-indigo-700 rounded-full inline-flex items-center justify-center text-xs">1</span>
-              Google 試算表欄位設定
-            </h3>
-            <p class="text-xs text-slate-600 mb-3 leading-relaxed">
-              請在 Google 試算表中建立一個分頁，名稱命名為 <code class="bg-slate-100 px-1.5 py-0.5 rounded text-indigo-600 font-mono">Equipment_List</code>，並設定以下第 1 列標題：
-            </p>
-            <ul class="text-xs text-slate-700 space-y-1.5 font-mono bg-slate-50 p-3 rounded-xl border border-slate-200">
-              <li><strong class="text-indigo-600">A 欄:</strong> 設備 ID (例如 1001)</li>
-              <li><strong class="text-indigo-600">B 欄:</strong> 設備名稱 (例如 投影機)</li>
-              <li><strong class="text-indigo-600">C 欄:</strong> 狀態 (可借用 / 借出中)</li>
-              <li><strong class="text-indigo-600">D 欄:</strong> 保管人/備註</li>
-              <li><strong class="text-indigo-600">E 欄:</strong> 廠牌 (例如 Epson)</li>
-            </ul>
-          </div>
-
-          <!-- 步驟教學 2: 部署步驟 -->
-          <div class="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm">
-            <h3 class="text-sm font-bold text-slate-900 mb-3 flex items-center gap-2">
-              <span class="w-5 h-5 bg-indigo-100 text-indigo-700 rounded-full inline-flex items-center justify-center text-xs">2</span>
-              部署網頁應用程式 (Web App)
-            </h3>
-            <ol class="text-xs text-slate-600 space-y-2 list-decimal list-inside leading-relaxed">
-              <li>點擊試算表選單 <strong class="text-slate-800">擴充功能 ➔ Apps Script</strong>。</li>
-              <li>清除原本內容，貼上左側完整的程式碼並儲存。</li>
-              <li>點選右上角 <strong class="text-indigo-600">部署 ➔ 新增部署</strong>。</li>
-              <li>種類選擇 <strong class="text-slate-800">「網頁應用程式」</strong>。</li>
-              <li>誰可以存取 (Who has access) 選擇：<strong class="text-amber-600 font-semibold">所有人 (Anyone)</strong>。</li>
-              <li>點擊部署並授權後，複製產生的 <strong class="text-slate-800">網頁應用程式 URL</strong> 貼回前台即可！</li>
-            </ol>
-          </div>
-
-        </div>
-
-      </div>
-
-    </div>
-
-  </main>
-
-  <!-- 提示 Toast 訊息彈窗 -->
-  <div id="toast" class="fixed bottom-5 right-5 transform translate-y-20 opacity-0 transition-all duration-300 max-w-sm w-full bg-slate-900 text-white rounded-2xl p-4 shadow-xl border border-slate-700 flex items-start space-x-3 z-50">
-    <div id="toast-icon" class="text-emerald-400 text-lg mt-0.5">
-      <i class="fa-solid fa-circle-check"></i>
-    </div>
-    <div class="flex-1">
-      <h4 id="toast-title" class="text-sm font-bold">訊息通知</h4>
-      <p id="toast-msg" class="text-xs text-slate-300 mt-1 whitespace-pre-line"></p>
-    </div>
-    <button onclick="hideToast()" class="text-slate-400 hover:text-white">
-      <i class="fa-solid fa-xmark text-sm"></i>
-    </button>
+  <!-- 模式選擇 -->
+  <div class="mode-switch">
+    <button id="btn-borrow" class="mode-btn active-borrow" onclick="setMode('borrow')">📤 設備借用</button>
+    <button id="btn-return" class="mode-btn" onclick="setMode('return')">📥 設備歸還</button>
   </div>
 
-  <!-- JavaScript 控制腳本 -->
-  <script>
-    // 預設模擬設備資料 (Mock Sheet)
-    const initialMockData = [
-      { id: "1001", name: "微型投影機", status: "可借用", note: "會議室 A", brand: "Epson" },
-      { id: "1002", name: "高效能筆記型電腦", status: "借出中", note: "研發部 - 張小明", brand: "ASUS" },
-      { id: "1003", name: "無線簡報簡報筆", status: "可借用", note: "總務處", brand: "Logitech" },
-      { id: "1004", name: "便攜式藍芽喇叭", status: "可借用", note: "活動組", brand: "JBL" },
-      { id: "1005", name: "4K 攝影機", status: "借出中", note: "媒體組 - 陳大俠", brand: "Sony" },
-      { id: "1006", name: "外接擴充埠 Dock", status: "可借用", note: "資訊室", brand: "Dell" }
-    ];
+  <!-- 相機選單 -->
+  <select id="camera-select"></select>
 
-    let mockEquipmentList = JSON.parse(JSON.stringify(initialMockData));
-    let currentAction = "borrow"; // 'borrow' 或 'return'
-    let isMockMode = true;
-    let gasApiUrl = localStorage.getItem("gas_equipment_url") || "";
+  <!-- 掃描視窗 -->
+  <div id="reader"></div>
 
-    // 頁面初始化
-    window.onload = function() {
-      if (gasApiUrl) {
-        document.getElementById("gas-url-input").value = gasApiUrl;
-      }
-      renderEquipmentTable();
-      renderQuickButtons();
-      addLog("系統初始化完成。目前運作模式：前端模擬模式 (Mock API)");
-    };
+  <!-- 結果顯示 -->
+  <div id="result">相機啟動中，請稍候...</div>
+</div>
 
-    // 切換 Tab
-    function switchTab(tab) {
-      const frontendPage = document.getElementById("page-frontend");
-      const backendPage = document.getElementById("page-backend");
-      const frontendBtn = document.getElementById("tab-frontend-btn");
-      const backendBtn = document.getElementById("tab-backend-btn");
+<script>
+  // ★★★ 請替換成您部署獲得的 GAS Web App 網址 ★★★
+  const API_URL = "https://script.google.com/macros/s/AKfycbzwiXDdDs-LwBLsw1oH4SNk0XtkzQ3t66XciIPKWtBB5hB-2X3cp2zf4khNAC2l8Wsr/exec";
 
-      if (tab === 'frontend') {
-        frontendPage.classList.remove("hidden");
-        backendPage.classList.add("hidden");
-        frontendBtn.className = "flex items-center space-x-2 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 bg-indigo-600 text-white shadow-sm";
-        backendBtn.className = "flex items-center space-x-2 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 text-slate-300 hover:text-white hover:bg-slate-700";
-      } else {
-        frontendPage.classList.add("hidden");
-        backendPage.classList.remove("hidden");
-        backendBtn.className = "flex items-center space-x-2 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 bg-indigo-600 text-white shadow-sm";
-        frontendBtn.className = "flex items-center space-x-2 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 text-slate-300 hover:text-white hover:bg-slate-700";
-      }
+  let currentMode = 'borrow'; // 預設模式為借用
+  let isProcessing = false;
+  const html5QrCode = new Html5Qrcode("reader");
+  const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+  const cameraSelect = document.getElementById('camera-select');
+  const resultDiv = document.getElementById('result');
+
+  // 切換借用 / 歸還模式
+  function setMode(mode) {
+    currentMode = mode;
+    const btnBorrow = document.getElementById('btn-borrow');
+    const btnReturn = document.getElementById('btn-return');
+
+    if (mode === 'borrow') {
+      btnBorrow.className = 'mode-btn active-borrow';
+      btnReturn.className = 'mode-btn';
+    } else {
+      btnBorrow.className = 'mode-btn';
+      btnReturn.className = 'mode-btn active-return';
+    }
+  }
+
+  function onScanSuccess(decodedText) {
+    if (isProcessing) return;
+    isProcessing = true;
+
+    // 解析 QR Code 內容 (如包含 text= 參數則自動擷取編號)
+    if (decodedText.includes("text=")) {
+      decodedText = decodedText.split("text=")[1].split("&")[0];
     }
 
-    // 切換 API 模式 (Mock vs GAS URL)
-    function toggleApiMode() {
-      const toggle = document.getElementById("mode-toggle");
-      const label = document.getElementById("mode-label");
-      const gasUrlContainer = document.getElementById("gas-url-container");
+    const actionText = currentMode === 'borrow' ? '借用' : '歸還';
+    resultDiv.style.color = "#0056b3";
+    resultDiv.innerText = `讀取到編號：${decodedText}\n正在處理${actionText}中...`;
 
-      isMockMode = !toggle.checked;
+    // 發送請求至 Google Apps Script
+    fetch(`${API_URL}?id=${encodeURIComponent(decodedText)}&action=${currentMode}`)
+      .then(response => response.text())
+      .then(text => {
+        resultDiv.style.color = text.includes("成功") ? "green" : "red";
+        resultDiv.innerText = text;
 
-      if (isMockMode) {
-        label.innerText = "前端模擬模式 (Mock Sheet)";
-        label.className = "ms-3 text-xs sm:text-sm font-medium text-amber-600 bg-amber-50 px-2.5 py-1 rounded-md border border-amber-200";
-        gasUrlContainer.classList.add("hidden");
-        addLog("[Mode] 切換至前端模擬模式");
-      } else {
-        label.innerText = "真實 GAS API 串接模式";
-        label.className = "ms-3 text-xs sm:text-sm font-medium text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200";
-        gasUrlContainer.classList.remove("hidden");
-        addLog("[Mode] 切換至 Google Apps Script API 串接模式");
-      }
-    }
-
-    // 儲存 GAS URL
-    function saveGasUrl() {
-      const url = document.getElementById("gas-url-input").value.trim();
-      gasApiUrl = url;
-      localStorage.setItem("gas_equipment_url", url);
-      showToast("已儲存網址", "GAS API URL 已成功儲存於本地瀏覽器。", "success");
-      addLog("[Config] GAS URL 已更新: " + (url ? url.substring(0, 35) + "..." : "無"));
-    }
-
-    // 切換操作 (借用 / 歸還)
-    function setAction(action) {
-      currentAction = action;
-      const borrowBtn = document.getElementById("action-borrow-btn");
-      const returnBtn = document.getElementById("action-return-btn");
-      const submitBtn = document.getElementById("submit-btn");
-      const submitBtnText = document.getElementById("submit-btn-text");
-
-      if (action === 'borrow') {
-        borrowBtn.className = "py-2.5 px-4 rounded-lg text-sm font-bold transition-all duration-200 bg-emerald-600 text-white shadow-sm flex items-center justify-center gap-2";
-        returnBtn.className = "py-2.5 px-4 rounded-lg text-sm font-bold transition-all duration-200 text-slate-600 hover:text-slate-900 flex items-center justify-center gap-2";
-        submitBtn.className = "w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition duration-200 flex items-center justify-center gap-2 text-sm";
-        submitBtnText.innerText = "執行「設備借用」";
-      } else {
-        returnBtn.className = "py-2.5 px-4 rounded-lg text-sm font-bold transition-all duration-200 bg-amber-600 text-white shadow-sm flex items-center justify-center gap-2";
-        borrowBtn.className = "py-2.5 px-4 rounded-lg text-sm font-bold transition-all duration-200 text-slate-600 hover:text-slate-900 flex items-center justify-center gap-2";
-        submitBtn.className = "w-full py-3 px-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl shadow-md transition duration-200 flex items-center justify-center gap-2 text-sm";
-        submitBtnText.innerText = "執行「設備歸還」";
-      }
-    }
-
-    // 填入設備 ID 快捷鍵
-    function fillEquipmentId(id) {
-      document.getElementById("equipment-id-input").value = id;
-    }
-
-    // 繪製即時表格
-    function renderEquipmentTable() {
-      const tbody = document.getElementById("equipment-table-body");
-      tbody.innerHTML = "";
-
-      mockEquipmentList.forEach(item => {
-        const isAvailable = item.status === "可借用";
-        const statusBadge = isAvailable
-          ? `<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1"><i class="fa-solid fa-circle-check text-[10px]"></i> 可借用</span>`
-          : `<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-800 border border-amber-200 inline-flex items-center gap-1"><i class="fa-solid fa-clock text-[10px]"></i> 借出中</span>`;
-
-        const tr = document.createElement("tr");
-        tr.className = "hover:bg-slate-50 transition cursor-pointer";
-        tr.onclick = () => fillEquipmentId(item.id);
-        tr.innerHTML = `
-          <td class="py-3 px-3 font-mono font-bold text-indigo-600">${item.id}</td>
-          <td class="py-3 px-3 font-medium">${item.name}</td>
-          <td class="py-3 px-3 text-center">${statusBadge}</td>
-          <td class="py-3 px-3 text-slate-500">${item.brand}</td>
-          <td class="py-3 px-3 text-slate-500">${item.note}</td>
-        `;
-        tbody.appendChild(tr);
-      });
-    }
-
-    // 繪製快速按鈕
-    function renderQuickButtons() {
-      const container = document.getElementById("quick-id-buttons");
-      container.innerHTML = "";
-      mockEquipmentList.forEach(item => {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.onclick = () => fillEquipmentId(item.id);
-        btn.className = "px-2.5 py-1 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 font-mono text-xs rounded-lg border border-slate-200 transition";
-        btn.innerText = `#${item.id}`;
-        container.appendChild(btn);
-      });
-    }
-
-    // 重置 Mock 資料
-    function resetMockData() {
-      mockEquipmentList = JSON.parse(JSON.stringify(initialMockData));
-      renderEquipmentTable();
-      showToast("資料已重置", "已還原模擬設備試算表為初始狀態。", "info");
-      addLog("[Reset] 模擬設備資料已重置");
-    }
-
-    // 提交表單處理
-    async function handleFormSubmit(e) {
-      e.preventDefault();
-      const eqId = document.getElementById("equipment-id-input").value.trim();
-      if (!eqId) return;
-
-      const submitBtn = document.getElementById("submit-btn");
-      submitBtn.disabled = true;
-      submitBtn.classList.add("opacity-75");
-
-      addLog(`[Request] 發送請求 ➔ 動作: ${currentAction}, 設備 ID: ${eqId}`);
-
-      if (isMockMode) {
-        // 前端模擬處理
         setTimeout(() => {
-          processMockRequest(currentAction, eqId);
-          submitBtn.disabled = false;
-          submitBtn.classList.remove("opacity-75");
-        }, 300);
-      } else {
-        // 真實 GAS Web App 呼叫
-        if (!gasApiUrl) {
-          showToast("缺少 API 網址", "請先輸入並儲存 Google Apps Script Web App URL！", "error");
-          addLog("[Error] 尚未設定 GAS Web App URL");
-          submitBtn.disabled = false;
-          submitBtn.classList.remove("opacity-75");
-          return;
-        }
+          isProcessing = false;
+          resultDiv.style.color = "#333";
+          resultDiv.innerText = "請對準下一個 QR Code 進行掃描...";
+        }, 3500);
+      })
+      .catch(error => {
+        resultDiv.style.color = "red";
+        resultDiv.innerText = "系統連線錯誤！";
+        setTimeout(() => { isProcessing = false; }, 3500);
+      });
+  }
 
-        try {
-          const requestUrl = `${gasApiUrl}?action=${currentAction}&id=${encodeURIComponent(eqId)}`;
-          const response = await fetch(requestUrl);
-          const resultText = await response.text();
+  // 啟動指定鏡頭
+  function startCamera(cameraId) {
+    html5QrCode.start(cameraId, config, onScanSuccess)
+      .then(() => { resultDiv.innerText = "請對準 QR Code 進行掃描..."; })
+      .catch(err => { console.error(err); });
+  }
 
-          const isSuccess = resultText.includes("成功");
-          showToast(
-            isSuccess ? "API 執行成功" : "API 執行回應", 
-            resultText, 
-            isSuccess ? "success" : "error"
-          );
+  // 取得鏡頭清單
+  Html5Qrcode.getCameras().then(devices => {
+    if (devices && devices.length) {
+      devices.forEach((device, index) => {
+        const option = document.createElement('option');
+        option.value = device.id;
+        option.text = device.label || `相機 ${index + 1}`;
+        cameraSelect.appendChild(option);
+      });
 
-          addLog(`[Response] ${resultText}`);
+      startCamera(cameraSelect.value);
 
-          // 若在真實模式下成功，同時更新本地畫面
-          if (isSuccess) {
-            updateLocalMockState(currentAction, eqId);
-          }
-
-        } catch (error) {
-          showToast("連線失敗", "呼叫 GAS API 時發生錯誤，請檢查網址或 CORS 權限。\n" + error.message, "error");
-          addLog(`[Error] 呼叫失敗: ${error.message}`);
-        } finally {
-          submitBtn.disabled = false;
-          submitBtn.classList.remove("opacity-75");
-        }
-      }
+      cameraSelect.addEventListener('change', () => {
+        html5QrCode.stop().then(() => {
+          startCamera(cameraSelect.value);
+        }).catch(err => console.error("切換鏡頭失敗", err));
+      });
     }
+  }).catch(err => {
+    resultDiv.innerText = "無法取得相機權限，請確認瀏覽器授權。";
+  });
+</script>
 
-    // 模擬處理邏輯 (模擬 GAS doGet)
-    function processMockRequest(action, id) {
-      const item = mockEquipmentList.find(x => String(x.id).trim() === String(id).trim());
-
-      if (!item) {
-        const msg = `找不到設備編號：${id}`;
-        showToast("錯誤", msg, "error");
-        addLog(`[Result] 失敗 ➔ ${msg}`);
-        return;
-      }
-
-      if (action === "return") {
-        if (item.status === "借出中") {
-          item.status = "可借用";
-          renderEquipmentTable();
-          const msg = `歸還成功！\n${item.brand} ${item.name} 狀態已更新為「可借用」。`;
-          showToast("歸還成功", msg, "success");
-          addLog(`[Result] 成功 ➔ ${msg.replace('\n', ' ')}`);
-        } else {
-          const msg = `歸還失敗！該設備目前狀態為：${item.status}`;
-          showToast("歸還失敗", msg, "error");
-          addLog(`[Result] 失敗 ➔ ${msg}`);
-        }
-      } else {
-        // borrow
-        if (item.status === "可借用") {
-          item.status = "借出中";
-          renderEquipmentTable();
-          const msg = `借用成功！\n${item.brand} ${item.name} 狀態已更新為「借出中」。`;
-          showToast("借用成功", msg, "success");
-          addLog(`[Result] 成功 ➔ ${msg.replace('\n', ' ')}`);
-        } else {
-          const msg = `借用失敗！該設備目前狀態為：${item.status}`;
-          showToast("借用失敗", msg, "error");
-          addLog(`[Result] 失敗 ➔ ${msg}`);
-        }
-      }
-    }
-
-    // 當真實模式成功時更新本地模擬視圖
-    function updateLocalMockState(action, id) {
-      const item = mockEquipmentList.find(x => String(x.id).trim() === String(id).trim());
-      if (item) {
-        item.status = (action === "return") ? "可借用" : "借出中";
-        renderEquipmentTable();
-      }
-    }
-
-    // 紀錄 Log Console
-    function addLog(text) {
-      const consoleEl = document.getElementById("log-console");
-      const time = new Date().toLocaleTimeString();
-      const div = document.createElement("div");
-      div.className = "text-slate-300 font-mono text-xs";
-      div.innerHTML = `<span class="text-slate-500">[${time}]</span> ${escapeHtml(text)}`;
-      consoleEl.appendChild(div);
-      consoleEl.scrollTop = consoleEl.scrollHeight;
-    }
-
-    function clearLogs() {
-      document.getElementById("log-console").innerHTML = '<div class="text-slate-500 italic">[System] 日誌紀錄已清除。</div>';
-    }
-
-    // Toast 訊息提示燈箱
-    let toastTimeout;
-    function showToast(title, msg, type = "info") {
-      const toast = document.getElementById("toast");
-      const toastTitle = document.getElementById("toast-title");
-      const toastMsg = document.getElementById("toast-msg");
-      const toastIcon = document.getElementById("toast-icon");
-
-      toastTitle.innerText = title;
-      toastMsg.innerText = msg;
-
-      if (type === "success") {
-        toastIcon.className = "text-emerald-400 text-lg mt-0.5";
-        toastIcon.innerHTML = '<i class="fa-solid fa-circle-check"></i>';
-      } else if (type === "error") {
-        toastIcon.className = "text-rose-400 text-lg mt-0.5";
-        toastIcon.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i>';
-      } else {
-        toastIcon.className = "text-indigo-400 text-lg mt-0.5";
-        toastIcon.innerHTML = '<i class="fa-solid fa-circle-info"></i>';
-      }
-
-      toast.classList.remove("translate-y-20", "opacity-0");
-      toast.classList.add("translate-y-0", "opacity-100");
-
-      clearTimeout(toastTimeout);
-      toastTimeout = setTimeout(() => {
-        hideToast();
-      }, 4500);
-    }
-
-    function hideToast() {
-      const toast = document.getElementById("toast");
-      toast.classList.remove("translate-y-0", "opacity-100");
-      toast.classList.add("translate-y-20", "opacity-0");
-    }
-
-    // 複製 GAS Code
-    function copyGasCode() {
-      const code = document.getElementById("gas-code-block").innerText;
-      const textArea = document.createElement("textarea");
-      textArea.value = code;
-      document.body.appendChild(textArea);
-      textArea.select();
-      try {
-        document.execCommand('copy');
-        showToast("複製成功", "Google Apps Script 程式碼已複製至剪貼簿！", "success");
-      } catch (err) {
-        showToast("複製失敗", "請手動選取文字複製。", "error");
-      }
-      document.body.removeChild(textArea);
-    }
-
-    function escapeHtml(text) {
-      return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-  </script>
 </body>
 </html>
