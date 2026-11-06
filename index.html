@@ -1,9 +1,30 @@
 
-function doGet(e) {
-  try {
-    const params = e && e.parameter ? e.parameter : {};
+/****************************************************
+ * 設備 QR Code 借還管理系統
+ * Google Apps Script 後端
+ ****************************************************/
 
-    // 沒有 action 時，顯示 HTML 操作介面
+const CONFIG = {
+  SPREADSHEET_ID: "1g1HhLYvqn8Mx3eP4FPl2ZKunWwkx-g2bRtXinBrzVlg",
+  EQUIPMENT_SHEET: "Equipment_List",
+  RECORD_SHEET: "Borrow_Records",
+  AVAILABLE: "可借用",
+  BORROWED: "借出中",
+  HISTORY_LIMIT: 100,
+  LOCK_TIMEOUT: 15000,
+  TIMEZONE: "Asia/Taipei"
+};
+
+
+/****************************************************
+ * 網頁入口：網頁介面及 API 共用
+ ****************************************************/
+
+function doGet(e) {
+  const params = e && e.parameter ? e.parameter : {};
+
+  try {
+    // 沒有 action 時顯示 HTML
     if (!params.action) {
       return HtmlService
         .createHtmlOutputFromFile("index")
@@ -14,24 +35,23 @@ function doGet(e) {
         );
     }
 
-    const action = params.action;
     let result;
 
-    if (action === "borrow") {
+    if (params.action === "borrow") {
       result = processEquipment(
         "borrow",
         params.id,
         params.name
       );
 
-    } else if (action === "return") {
+    } else if (params.action === "return") {
       result = processEquipment(
         "return",
         params.id,
         params.name
       );
 
-    } else if (action === "history") {
+    } else if (params.action === "history") {
       result = getHistory();
 
     } else {
@@ -47,6 +67,500 @@ function doGet(e) {
     return outputResult({
       success: false,
       message: error.message || "系統發生錯誤"
-    }, e && e.parameter ? e.parameter.callback : "");
+    }, params.callback);
   }
+}
+
+
+/****************************************************
+ * JSON / JSONP 回傳
+ ****************************************************/
+
+function outputResult(data, callback) {
+  const json = JSON.stringify(data);
+
+  if (
+    callback &&
+    /^[a-zA-Z_$][0-9a-zA-Z_$]*$/.test(callback)
+  ) {
+    return ContentService
+      .createTextOutput(callback + "(" + json + ");")
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  }
+
+  return ContentService
+    .createTextOutput(json)
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+
+/****************************************************
+ * 取得 Google 試算表
+ ****************************************************/
+
+function getSpreadsheet() {
+  return SpreadsheetApp.openById(
+    CONFIG.SPREADSHEET_ID
+  );
+}
+
+
+/****************************************************
+ * 取得設備工作表
+ ****************************************************/
+
+function getEquipmentSheet(ss) {
+  const sheet = ss.getSheetByName(
+    CONFIG.EQUIPMENT_SHEET
+  );
+
+  if (!sheet) {
+    throw new Error(
+      "找不到工作表：" + CONFIG.EQUIPMENT_SHEET
+    );
+  }
+
+  return sheet;
+}
+
+
+/****************************************************
+ * 取得或建立借還紀錄工作表
+ ****************************************************/
+
+function getRecordSheet(ss) {
+  let sheet = ss.getSheetByName(
+    CONFIG.RECORD_SHEET
+  );
+
+  if (!sheet) {
+    sheet = ss.insertSheet(CONFIG.RECORD_SHEET);
+  }
+
+  const headers = [
+    "設備編號",
+    "設備名稱",
+    "廠牌",
+    "借用人",
+    "借用時間",
+    "歸還人",
+    "歸還時間"
+  ];
+
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, 7)
+      .setValues([headers]);
+
+    sheet.getRange(1, 1, 1, 7)
+      .setFontWeight("bold")
+      .setBackground("#dbeafe");
+
+    sheet.setFrozenRows(1);
+  }
+
+  return sheet;
+}
+
+
+/****************************************************
+ * 第一次使用時執行
+ ****************************************************/
+
+function setupSystem() {
+  const ss = getSpreadsheet();
+  const equipmentSheet = getEquipmentSheet(ss);
+
+  if (equipmentSheet.getLastRow() < 2) {
+    throw new Error("設備工作表目前沒有設備資料");
+  }
+
+  if (equipmentSheet.getLastColumn() < 5) {
+    throw new Error("設備工作表必須有 A 到 E 五個欄位");
+  }
+
+  // 設備編號及 QR Code 使用文字格式
+  equipmentSheet.getRange("A:A").setNumberFormat("@");
+  equipmentSheet.getRange("D:D").setNumberFormat("@");
+
+  const recordSheet = getRecordSheet(ss);
+
+  recordSheet.getRange("E:E")
+    .setNumberFormat("yyyy/MM/dd HH:mm:ss");
+
+  recordSheet.getRange("G:G")
+    .setNumberFormat("yyyy/MM/dd HH:mm:ss");
+
+  recordSheet.autoResizeColumns(1, 7);
+
+  SpreadsheetApp.flush();
+
+  return "設備借還系統初始化完成！";
+}
+
+
+/****************************************************
+ * 驗證輸入
+ ****************************************************/
+
+function validateInput(id, name, action) {
+  const cleanId = String(id || "").trim();
+  const cleanName = String(name || "").trim();
+
+  if (!cleanId) {
+    throw new Error("缺少設備編號");
+  }
+
+  if (!cleanName) {
+    throw new Error("請輸入姓名");
+  }
+
+  if (cleanName.length > 50) {
+    throw new Error("姓名不可超過 50 個字");
+  }
+
+  if (!["borrow", "return"].includes(action)) {
+    throw new Error("操作類型錯誤");
+  }
+
+  return {
+    id: cleanId,
+    name: cleanName
+  };
+}
+
+
+/****************************************************
+ * 查找設備
+ * A：設備編號
+ * B：設備名稱
+ * C：設備狀態
+ * D：QR Code
+ * E：廠牌
+ ****************************************************/
+
+function findEquipment(sheet, id) {
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < 2) {
+    throw new Error("設備資料不存在");
+  }
+
+  const data = sheet.getRange(
+    2, 1, lastRow - 1, 5
+  ).getDisplayValues();
+
+  for (let i = 0; i < data.length; i++) {
+    const rowId = String(data[i][0]).trim();
+
+    if (rowId === id) {
+      return {
+        row: i + 2,
+        id: rowId,
+        equipmentName: data[i][1],
+        status: data[i][2],
+        qrCode: data[i][3],
+        brand: data[i][4]
+      };
+    }
+  }
+
+  throw new Error("找不到設備編號：" + id);
+}
+
+
+/****************************************************
+ * 借用／歸還總控制
+ ****************************************************/
+
+function processEquipment(action, id, name) {
+  const input = validateInput(id, name, action);
+
+  const lock = LockService.getScriptLock();
+
+  try {
+    lock.waitLock(CONFIG.LOCK_TIMEOUT);
+
+    const ss = getSpreadsheet();
+    const equipmentSheet = getEquipmentSheet(ss);
+    const recordSheet = getRecordSheet(ss);
+
+    const equipment = findEquipment(
+      equipmentSheet,
+      input.id
+    );
+
+    let result;
+
+    if (action === "borrow") {
+      result = borrowEquipment(
+        equipmentSheet,
+        recordSheet,
+        equipment,
+        input.name
+      );
+
+    } else {
+      result = returnEquipment(
+        equipmentSheet,
+        recordSheet,
+        equipment,
+        input.name
+      );
+    }
+
+    SpreadsheetApp.flush();
+
+    return result;
+
+  } catch (error) {
+    return {
+      success: false,
+      message: error.message || "操作失敗"
+    };
+
+  } finally {
+    if (lock.hasLock()) {
+      lock.releaseLock();
+    }
+  }
+}
+
+
+/****************************************************
+ * 借用設備
+ ****************************************************/
+
+function borrowEquipment(
+  equipmentSheet,
+  recordSheet,
+  equipment,
+  person
+) {
+  if (equipment.status !== CONFIG.AVAILABLE) {
+    throw new Error(
+      "此設備目前不是可借用狀態，無法借出"
+    );
+  }
+
+  const now = new Date();
+  let recordRow = null;
+
+  try {
+    // 新增借用紀錄
+    recordSheet.appendRow([
+      equipment.id,
+      equipment.equipmentName,
+      equipment.brand,
+      person,
+      now,
+      "",
+      ""
+    ]);
+
+    recordRow = recordSheet.getLastRow();
+
+    // 更新設備狀態
+    equipmentSheet.getRange(
+      equipment.row, 3
+    ).setValue(CONFIG.BORROWED);
+
+    return {
+      success: true,
+      action: "borrow",
+      id: equipment.id,
+      equipmentName: equipment.equipmentName,
+      brand: equipment.brand,
+      person: person,
+      time: formatTime(now),
+      status: CONFIG.BORROWED,
+      message: "設備借用成功！"
+    };
+
+  } catch (error) {
+    // 嘗試刪除剛新增的紀錄
+    try {
+      if (recordRow) {
+        recordSheet.deleteRow(recordRow);
+      }
+    } catch (rollbackError) {
+      console.error(rollbackError);
+    }
+
+    throw new Error("借用失敗：" + error.message);
+  }
+}
+
+
+/****************************************************
+ * 歸還設備
+ ****************************************************/
+
+function returnEquipment(
+  equipmentSheet,
+  recordSheet,
+  equipment,
+  person
+) {
+  if (equipment.status !== CONFIG.BORROWED) {
+    throw new Error(
+      "此設備目前沒有借出，無法歸還"
+    );
+  }
+
+  const lastRow = recordSheet.getLastRow();
+
+  if (lastRow < 2) {
+    throw new Error("找不到借用紀錄");
+  }
+
+  const data = recordSheet.getRange(
+    2, 1, lastRow - 1, 7
+  ).getValues();
+
+  let targetRow = -1;
+
+  // 從最新紀錄往前尋找尚未歸還的設備
+  for (let i = data.length - 1; i >= 0; i--) {
+    const rowId = String(data[i][0]).trim();
+    const returnTime = data[i][6];
+
+    if (
+      rowId === equipment.id &&
+      (returnTime === "" || returnTime === null)
+    ) {
+      targetRow = i + 2;
+      break;
+    }
+  }
+
+  if (targetRow === -1) {
+    throw new Error(
+      "找不到此設備尚未歸還的借用紀錄"
+    );
+  }
+
+  const now = new Date();
+
+  const oldValues = recordSheet.getRange(
+    targetRow, 6, 1, 2
+  ).getValues()[0];
+
+  try {
+    // 更新歸還人及歸還時間
+    recordSheet.getRange(
+      targetRow, 6, 1, 2
+    ).setValues([[
+      person,
+      now
+    ]]);
+
+    // 更新設備狀態
+    equipmentSheet.getRange(
+      equipment.row, 3
+    ).setValue(CONFIG.AVAILABLE);
+
+    return {
+      success: true,
+      action: "return",
+      id: equipment.id,
+      equipmentName: equipment.equipmentName,
+      brand: equipment.brand,
+      person: person,
+      time: formatTime(now),
+      status: CONFIG.AVAILABLE,
+      message: "設備歸還成功！"
+    };
+
+  } catch (error) {
+    // 嘗試還原歸還紀錄
+    try {
+      recordSheet.getRange(
+        targetRow, 6, 1, 2
+      ).setValues([oldValues]);
+    } catch (rollbackError) {
+      console.error(rollbackError);
+    }
+
+    throw new Error("歸還失敗：" + error.message);
+  }
+}
+
+
+/****************************************************
+ * 查詢最近 100 筆借還紀錄
+ ****************************************************/
+
+function getHistory() {
+  const lock = LockService.getScriptLock();
+
+  try {
+    lock.waitLock(CONFIG.LOCK_TIMEOUT);
+
+    const ss = getSpreadsheet();
+    const sheet = getRecordSheet(ss);
+
+    const lastRow = sheet.getLastRow();
+
+    if (lastRow < 2) {
+      return {
+        success: true,
+        records: []
+      };
+    }
+
+    const startRow = Math.max(
+      2,
+      lastRow - CONFIG.HISTORY_LIMIT + 1
+    );
+
+    const numberOfRows = lastRow - startRow + 1;
+
+    const data = sheet.getRange(
+      startRow, 1, numberOfRows, 7
+    ).getValues();
+
+    const records = data.reverse().map(row => ({
+      id: String(row[0]),
+      equipmentName: row[1],
+      brand: row[2],
+      borrower: row[3],
+      borrowTime: formatTime(row[4]),
+      returner: row[5] || "",
+      returnTime: formatTime(row[6])
+    }));
+
+    return {
+      success: true,
+      records: records
+    };
+
+  } catch (error) {
+    return {
+      success: false,
+      message: error.message || "讀取紀錄失敗",
+      records: []
+    };
+
+  } finally {
+    if (lock.hasLock()) {
+      lock.releaseLock();
+    }
+  }
+}
+
+
+/****************************************************
+ * 時間格式：台灣時間
+ ****************************************************/
+
+function formatTime(value) {
+  if (!value) {
+    return "";
+  }
+
+  return Utilities.formatDate(
+    new Date(value),
+    CONFIG.TIMEZONE,
+    "yyyy/MM/dd HH:mm:ss"
+  );
 }
