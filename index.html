@@ -1,566 +1,933 @@
 
-/****************************************************
- * 設備 QR Code 借還管理系統
- * Google Apps Script 後端
- ****************************************************/
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>設備 QR Code 借還管理系統</title>
 
-const CONFIG = {
-  SPREADSHEET_ID: "1g1HhLYvqn8Mx3eP4FPl2ZKunWwkx-g2bRtXinBrzVlg",
-  EQUIPMENT_SHEET: "Equipment_List",
-  RECORD_SHEET: "Borrow_Records",
-  AVAILABLE: "可借用",
-  BORROWED: "借出中",
-  HISTORY_LIMIT: 100,
-  LOCK_TIMEOUT: 15000,
-  TIMEZONE: "Asia/Taipei"
-};
+  <!-- QR Code 掃描套件 -->
+  <script src="https://unpkg.com/html5-qrcode"></script>
 
-
-/****************************************************
- * 網頁入口：網頁介面及 API 共用
- ****************************************************/
-
-function doGet(e) {
-  const params = e && e.parameter ? e.parameter : {};
-
-  try {
-    // 沒有 action 時顯示 HTML
-    if (!params.action) {
-      return HtmlService
-        .createHtmlOutputFromFile("index")
-        .setTitle("設備 QR Code 借還管理系統")
-        .addMetaTag(
-          "viewport",
-          "width=device-width, initial-scale=1"
-        );
+  <style>
+    * {
+      box-sizing: border-box;
     }
 
-    let result;
-
-    if (params.action === "borrow") {
-      result = processEquipment(
-        "borrow",
-        params.id,
-        params.name
-      );
-
-    } else if (params.action === "return") {
-      result = processEquipment(
-        "return",
-        params.id,
-        params.name
-      );
-
-    } else if (params.action === "history") {
-      result = getHistory();
-
-    } else {
-      result = {
-        success: false,
-        message: "不支援的操作類型"
-      };
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: "Microsoft JhengHei", Arial, sans-serif;
+      background: #f1f5f9;
+      color: #1e293b;
     }
 
-    return outputResult(result, params.callback);
-
-  } catch (error) {
-    return outputResult({
-      success: false,
-      message: error.message || "系統發生錯誤"
-    }, params.callback);
-  }
-}
-
-
-/****************************************************
- * JSON / JSONP 回傳
- ****************************************************/
-
-function outputResult(data, callback) {
-  const json = JSON.stringify(data);
-
-  if (
-    callback &&
-    /^[a-zA-Z_$][0-9a-zA-Z_$]*$/.test(callback)
-  ) {
-    return ContentService
-      .createTextOutput(callback + "(" + json + ");")
-      .setMimeType(ContentService.MimeType.JAVASCRIPT);
-  }
-
-  return ContentService
-    .createTextOutput(json)
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-
-/****************************************************
- * 取得 Google 試算表
- ****************************************************/
-
-function getSpreadsheet() {
-  return SpreadsheetApp.openById(
-    CONFIG.SPREADSHEET_ID
-  );
-}
-
-
-/****************************************************
- * 取得設備工作表
- ****************************************************/
-
-function getEquipmentSheet(ss) {
-  const sheet = ss.getSheetByName(
-    CONFIG.EQUIPMENT_SHEET
-  );
-
-  if (!sheet) {
-    throw new Error(
-      "找不到工作表：" + CONFIG.EQUIPMENT_SHEET
-    );
-  }
-
-  return sheet;
-}
-
-
-/****************************************************
- * 取得或建立借還紀錄工作表
- ****************************************************/
-
-function getRecordSheet(ss) {
-  let sheet = ss.getSheetByName(
-    CONFIG.RECORD_SHEET
-  );
-
-  if (!sheet) {
-    sheet = ss.insertSheet(CONFIG.RECORD_SHEET);
-  }
-
-  const headers = [
-    "設備編號",
-    "設備名稱",
-    "廠牌",
-    "借用人",
-    "借用時間",
-    "歸還人",
-    "歸還時間"
-  ];
-
-  if (sheet.getLastRow() === 0) {
-    sheet.getRange(1, 1, 1, 7)
-      .setValues([headers]);
-
-    sheet.getRange(1, 1, 1, 7)
-      .setFontWeight("bold")
-      .setBackground("#dbeafe");
-
-    sheet.setFrozenRows(1);
-  }
-
-  return sheet;
-}
-
-
-/****************************************************
- * 第一次使用時執行
- ****************************************************/
-
-function setupSystem() {
-  const ss = getSpreadsheet();
-  const equipmentSheet = getEquipmentSheet(ss);
-
-  if (equipmentSheet.getLastRow() < 2) {
-    throw new Error("設備工作表目前沒有設備資料");
-  }
-
-  if (equipmentSheet.getLastColumn() < 5) {
-    throw new Error("設備工作表必須有 A 到 E 五個欄位");
-  }
-
-  // 設備編號及 QR Code 使用文字格式
-  equipmentSheet.getRange("A:A").setNumberFormat("@");
-  equipmentSheet.getRange("D:D").setNumberFormat("@");
-
-  const recordSheet = getRecordSheet(ss);
-
-  recordSheet.getRange("E:E")
-    .setNumberFormat("yyyy/MM/dd HH:mm:ss");
-
-  recordSheet.getRange("G:G")
-    .setNumberFormat("yyyy/MM/dd HH:mm:ss");
-
-  recordSheet.autoResizeColumns(1, 7);
-
-  SpreadsheetApp.flush();
-
-  return "設備借還系統初始化完成！";
-}
-
-
-/****************************************************
- * 驗證輸入
- ****************************************************/
-
-function validateInput(id, name, action) {
-  const cleanId = String(id || "").trim();
-  const cleanName = String(name || "").trim();
-
-  if (!cleanId) {
-    throw new Error("缺少設備編號");
-  }
-
-  if (!cleanName) {
-    throw new Error("請輸入姓名");
-  }
-
-  if (cleanName.length > 50) {
-    throw new Error("姓名不可超過 50 個字");
-  }
-
-  if (!["borrow", "return"].includes(action)) {
-    throw new Error("操作類型錯誤");
-  }
-
-  return {
-    id: cleanId,
-    name: cleanName
-  };
-}
-
-
-/****************************************************
- * 查找設備
- * A：設備編號
- * B：設備名稱
- * C：設備狀態
- * D：QR Code
- * E：廠牌
- ****************************************************/
-
-function findEquipment(sheet, id) {
-  const lastRow = sheet.getLastRow();
-
-  if (lastRow < 2) {
-    throw new Error("設備資料不存在");
-  }
-
-  const data = sheet.getRange(
-    2, 1, lastRow - 1, 5
-  ).getDisplayValues();
-
-  for (let i = 0; i < data.length; i++) {
-    const rowId = String(data[i][0]).trim();
-
-    if (rowId === id) {
-      return {
-        row: i + 2,
-        id: rowId,
-        equipmentName: data[i][1],
-        status: data[i][2],
-        qrCode: data[i][3],
-        brand: data[i][4]
-      };
-    }
-  }
-
-  throw new Error("找不到設備編號：" + id);
-}
-
-
-/****************************************************
- * 借用／歸還總控制
- ****************************************************/
-
-function processEquipment(action, id, name) {
-  const input = validateInput(id, name, action);
-
-  const lock = LockService.getScriptLock();
-
-  try {
-    lock.waitLock(CONFIG.LOCK_TIMEOUT);
-
-    const ss = getSpreadsheet();
-    const equipmentSheet = getEquipmentSheet(ss);
-    const recordSheet = getRecordSheet(ss);
-
-    const equipment = findEquipment(
-      equipmentSheet,
-      input.id
-    );
-
-    let result;
-
-    if (action === "borrow") {
-      result = borrowEquipment(
-        equipmentSheet,
-        recordSheet,
-        equipment,
-        input.name
-      );
-
-    } else {
-      result = returnEquipment(
-        equipmentSheet,
-        recordSheet,
-        equipment,
-        input.name
-      );
+    .container {
+      max-width: 1050px;
+      margin: auto;
     }
 
-    SpreadsheetApp.flush();
-
-    return result;
-
-  } catch (error) {
-    return {
-      success: false,
-      message: error.message || "操作失敗"
-    };
-
-  } finally {
-    if (lock.hasLock()) {
-      lock.releaseLock();
+    header {
+      text-align: center;
+      margin-bottom: 25px;
     }
-  }
-}
 
+    header h1 {
+      color: #1d4ed8;
+      font-size: 28px;
+      margin-bottom: 8px;
+    }
 
-/****************************************************
- * 借用設備
- ****************************************************/
+    header p {
+      color: #64748b;
+      margin: 0;
+    }
 
-function borrowEquipment(
-  equipmentSheet,
-  recordSheet,
-  equipment,
-  person
-) {
-  if (equipment.status !== CONFIG.AVAILABLE) {
-    throw new Error(
-      "此設備目前不是可借用狀態，無法借出"
-    );
-  }
+    .card {
+      background: white;
+      border-radius: 14px;
+      padding: 22px;
+      margin-bottom: 20px;
+      box-shadow: 0 3px 12px rgba(0,0,0,0.06);
+    }
 
-  const now = new Date();
-  let recordRow = null;
+    .card h2 {
+      margin-top: 0;
+      font-size: 20px;
+      color: #1e40af;
+    }
 
-  try {
-    // 新增借用紀錄
-    recordSheet.appendRow([
-      equipment.id,
-      equipment.equipmentName,
-      equipment.brand,
-      person,
-      now,
-      "",
-      ""
-    ]);
+    .mode-buttons {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
 
-    recordRow = recordSheet.getLastRow();
+    button {
+      border: none;
+      border-radius: 9px;
+      padding: 12px 18px;
+      font-size: 16px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: 0.2s;
+    }
 
-    // 更新設備狀態
-    equipmentSheet.getRange(
-      equipment.row, 3
-    ).setValue(CONFIG.BORROWED);
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
 
-    return {
-      success: true,
-      action: "borrow",
-      id: equipment.id,
-      equipmentName: equipment.equipmentName,
-      brand: equipment.brand,
-      person: person,
-      time: formatTime(now),
-      status: CONFIG.BORROWED,
-      message: "設備借用成功！"
-    };
+    .mode-btn {
+      flex: 1;
+      background: #e2e8f0;
+      color: #334155;
+    }
 
-  } catch (error) {
-    // 嘗試刪除剛新增的紀錄
-    try {
-      if (recordRow) {
-        recordSheet.deleteRow(recordRow);
+    .mode-btn.active.borrow {
+      background: #2563eb;
+      color: white;
+    }
+
+    .mode-btn.active.return {
+      background: #16a34a;
+      color: white;
+    }
+
+    label {
+      display: block;
+      margin: 14px 0 7px;
+      font-weight: bold;
+    }
+
+    input {
+      width: 100%;
+      padding: 13px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      font-size: 16px;
+      outline: none;
+    }
+
+    input:focus {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+    }
+
+    .primary-btn {
+      width: 100%;
+      margin-top: 14px;
+      background: #2563eb;
+      color: white;
+    }
+
+    .primary-btn.return {
+      background: #16a34a;
+    }
+
+    .secondary-btn {
+      background: #64748b;
+      color: white;
+    }
+
+    .scan-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .scan-buttons button {
+      flex: 1;
+    }
+
+    #reader {
+      width: 100%;
+      max-width: 450px;
+      margin: 18px auto 0;
+      overflow: hidden;
+      border-radius: 10px;
+    }
+
+    .message {
+      display: none;
+      padding: 13px;
+      border-radius: 8px;
+      margin-top: 15px;
+      line-height: 1.6;
+    }
+
+    .message.success {
+      display: block;
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .message.error {
+      display: block;
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .message.info {
+      display: block;
+      background: #dbeafe;
+      color: #1e40af;
+    }
+
+    .equipment-info {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .info-item {
+      background: #f8fafc;
+      padding: 13px;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+    }
+
+    .info-label {
+      color: #64748b;
+      font-size: 13px;
+      margin-bottom: 5px;
+    }
+
+    .info-value {
+      font-size: 17px;
+      font-weight: bold;
+      overflow-wrap: anywhere;
+    }
+
+    .status-available {
+      color: #16a34a;
+    }
+
+    .status-borrowed {
+      color: #dc2626;
+    }
+
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 850px;
+      font-size: 14px;
+    }
+
+    th, td {
+      padding: 12px 10px;
+      text-align: left;
+      border-bottom: 1px solid #e2e8f0;
+      white-space: nowrap;
+    }
+
+    th {
+      background: #eff6ff;
+      color: #1e40af;
+    }
+
+    tr:hover td {
+      background: #f8fafc;
+    }
+
+    .empty {
+      text-align: center;
+      padding: 25px;
+      color: #94a3b8;
+    }
+
+    .history-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+
+    .history-header h2 {
+      margin: 0;
+    }
+
+    .refresh-btn {
+      background: #e2e8f0;
+      color: #334155;
+      font-size: 14px;
+    }
+
+    footer {
+      text-align: center;
+      color: #94a3b8;
+      font-size: 13px;
+      padding: 15px;
+    }
+
+    @media (max-width: 600px) {
+      body {
+        padding: 12px;
       }
-    } catch (rollbackError) {
-      console.error(rollbackError);
-    }
 
-    throw new Error("借用失敗：" + error.message);
+      header h1 {
+        font-size: 22px;
+      }
+
+      .card {
+        padding: 16px;
+      }
+
+      .equipment-info {
+        grid-template-columns: 1fr;
+      }
+
+      .mode-buttons button {
+        font-size: 15px;
+        padding: 12px 8px;
+      }
+
+      .scan-buttons {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+
+<body>
+<div class="container">
+
+  <header>
+    <h1>設備 QR Code 借還管理系統</h1>
+    <p>Equipment Borrowing & Returning System</p>
+  </header>
+
+  <!-- 借用與歸還操作 -->
+  <section class="card">
+    <h2>一、設備借還操作</h2>
+
+    <div class="mode-buttons">
+      <button
+        id="borrowMode"
+        class="mode-btn active borrow"
+        onclick="setMode('borrow')">
+        借用設備
+      </button>
+
+      <button
+        id="returnMode"
+        class="mode-btn"
+        onclick="setMode('return')">
+        歸還設備
+      </button>
+    </div>
+
+    <label for="personName" id="nameLabel">
+      借用人姓名
+    </label>
+
+    <input
+      id="personName"
+      type="text"
+      maxlength="50"
+      placeholder="請輸入借用人姓名"
+      autocomplete="name">
+
+    <label for="equipmentId">
+      設備編號
+    </label>
+
+    <input
+      id="equipmentId"
+      type="text"
+      placeholder="可掃描 QR Code 或手動輸入設備編號">
+
+    <button
+      id="submitBtn"
+      class="primary-btn"
+      onclick="submitEquipment()">
+      確認借用
+    </button>
+
+    <div class="scan-buttons">
+      <button
+        class="secondary-btn"
+        id="startBtn"
+        onclick="startScanner()">
+        開啟 QR Code 掃描
+      </button>
+
+      <button
+        class="secondary-btn"
+        id="stopBtn"
+        onclick="stopScanner()"
+        disabled>
+        關閉掃描
+      </button>
+    </div>
+
+    <div id="reader"></div>
+
+    <div id="message" class="message"></div>
+  </section>
+
+  <!-- 設備資訊 -->
+  <section class="card">
+    <h2>二、設備資訊</h2>
+
+    <div class="equipment-info">
+
+      <div class="info-item">
+        <div class="info-label">設備編號</div>
+        <div class="info-value" id="infoId">---</div>
+      </div>
+
+      <div class="info-item">
+        <div class="info-label">設備名稱</div>
+        <div class="info-value" id="infoName">---</div>
+      </div>
+
+      <div class="info-item">
+        <div class="info-label">設備廠牌</div>
+        <div class="info-value" id="infoBrand">---</div>
+      </div>
+
+      <div class="info-item">
+        <div class="info-label">目前狀態</div>
+        <div class="info-value" id="infoStatus">---</div>
+      </div>
+
+      <div class="info-item">
+        <div class="info-label">操作人</div>
+        <div class="info-value" id="infoPerson">---</div>
+      </div>
+
+      <div class="info-item">
+        <div class="info-label">操作時間</div>
+        <div class="info-value" id="infoTime">---</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- 借還紀錄 -->
+  <section class="card">
+    <div class="history-header">
+      <h2>三、設備借還紀錄</h2>
+
+      <button
+        class="refresh-btn"
+        onclick="loadHistory()">
+        ↻ 重新整理
+      </button>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>設備編號</th>
+            <th>設備名稱</th>
+            <th>廠牌</th>
+            <th>借用人</th>
+            <th>借用時間</th>
+            <th>歸還人</th>
+            <th>歸還時間</th>
+          </tr>
+        </thead>
+
+        <tbody id="historyBody">
+          <tr>
+            <td colspan="7" class="empty">
+              正在載入紀錄...
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    設備 QR Code 借還管理系統
+  </footer>
+
+</div>
+
+<script>
+/****************************************************
+ * GAS API 網址
+ ****************************************************/
+
+const API_URL =
+  "https://script.google.com/macros/s/AKfycbxji7jAA3JbMwiAlXb8yC4LwoO_FD8HaGWLeou57llEHCNV81EIV-d5KM_9qUvui9ou/exec";
+
+
+/****************************************************
+ * 系統狀態
+ ****************************************************/
+
+let currentMode = "borrow";
+let html5QrCode = null;
+let scannerRunning = false;
+let processing = false;
+let lastScanTime = 0;
+
+
+/****************************************************
+ * 借用／歸還模式
+ ****************************************************/
+
+function setMode(mode) {
+  if (processing) return;
+
+  currentMode = mode;
+
+  const borrowBtn = document.getElementById("borrowMode");
+  const returnBtn = document.getElementById("returnMode");
+  const submitBtn = document.getElementById("submitBtn");
+  const nameLabel = document.getElementById("nameLabel");
+  const nameInput = document.getElementById("personName");
+
+  if (mode === "borrow") {
+    borrowBtn.className = "mode-btn active borrow";
+    returnBtn.className = "mode-btn";
+
+    nameLabel.textContent = "借用人姓名";
+    nameInput.placeholder = "請輸入借用人姓名";
+
+    submitBtn.textContent = "確認借用";
+    submitBtn.className = "primary-btn";
+
+  } else {
+    borrowBtn.className = "mode-btn";
+    returnBtn.className = "mode-btn active return";
+
+    nameLabel.textContent = "歸還人姓名";
+    nameInput.placeholder = "請輸入歸還人姓名";
+
+    submitBtn.textContent = "確認歸還";
+    submitBtn.className = "primary-btn return";
+  }
+
+  showMessage("", "");
+}
+
+
+/****************************************************
+ * 顯示訊息
+ ****************************************************/
+
+function showMessage(message, type) {
+  const box = document.getElementById("message");
+
+  box.textContent = message;
+  box.className = "message";
+
+  if (message) {
+    box.classList.add(type || "info");
   }
 }
 
 
 /****************************************************
- * 歸還設備
+ * HTML 安全處理
  ****************************************************/
 
-function returnEquipment(
-  equipmentSheet,
-  recordSheet,
-  equipment,
-  person
-) {
-  if (equipment.status !== CONFIG.BORROWED) {
-    throw new Error(
-      "此設備目前沒有借出，無法歸還"
-    );
-  }
-
-  const lastRow = recordSheet.getLastRow();
-
-  if (lastRow < 2) {
-    throw new Error("找不到借用紀錄");
-  }
-
-  const data = recordSheet.getRange(
-    2, 1, lastRow - 1, 7
-  ).getValues();
-
-  let targetRow = -1;
-
-  // 從最新紀錄往前尋找尚未歸還的設備
-  for (let i = data.length - 1; i >= 0; i--) {
-    const rowId = String(data[i][0]).trim();
-    const returnTime = data[i][6];
-
-    if (
-      rowId === equipment.id &&
-      (returnTime === "" || returnTime === null)
-    ) {
-      targetRow = i + 2;
-      break;
-    }
-  }
-
-  if (targetRow === -1) {
-    throw new Error(
-      "找不到此設備尚未歸還的借用紀錄"
-    );
-  }
-
-  const now = new Date();
-
-  const oldValues = recordSheet.getRange(
-    targetRow, 6, 1, 2
-  ).getValues()[0];
-
-  try {
-    // 更新歸還人及歸還時間
-    recordSheet.getRange(
-      targetRow, 6, 1, 2
-    ).setValues([[
-      person,
-      now
-    ]]);
-
-    // 更新設備狀態
-    equipmentSheet.getRange(
-      equipment.row, 3
-    ).setValue(CONFIG.AVAILABLE);
-
-    return {
-      success: true,
-      action: "return",
-      id: equipment.id,
-      equipmentName: equipment.equipmentName,
-      brand: equipment.brand,
-      person: person,
-      time: formatTime(now),
-      status: CONFIG.AVAILABLE,
-      message: "設備歸還成功！"
-    };
-
-  } catch (error) {
-    // 嘗試還原歸還紀錄
-    try {
-      recordSheet.getRange(
-        targetRow, 6, 1, 2
-      ).setValues([oldValues]);
-    } catch (rollbackError) {
-      console.error(rollbackError);
-    }
-
-    throw new Error("歸還失敗：" + error.message);
-  }
+function escapeHTML(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 
 /****************************************************
- * 查詢最近 100 筆借還紀錄
+ * JSONP 呼叫 GAS API
  ****************************************************/
 
-function getHistory() {
-  const lock = LockService.getScriptLock();
+function callAPI(params) {
+  return new Promise((resolve, reject) => {
 
-  try {
-    lock.waitLock(CONFIG.LOCK_TIMEOUT);
+    const callbackName =
+      "gasCallback_" +
+      Date.now() +
+      "_" +
+      Math.floor(Math.random() * 100000);
 
-    const ss = getSpreadsheet();
-    const sheet = getRecordSheet(ss);
+    const script = document.createElement("script");
 
-    const lastRow = sheet.getLastRow();
+    const query = new URLSearchParams({
+      ...params,
+      callback: callbackName
+    });
 
-    if (lastRow < 2) {
-      return {
-        success: true,
-        records: []
-      };
+    let finished = false;
+
+    const timeout = setTimeout(() => {
+      finish(new Error("連線逾時，請檢查網路或 GAS 部署"));
+    }, 20000);
+
+    function cleanup() {
+      clearTimeout(timeout);
+      delete window[callbackName];
+
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
     }
 
-    const startRow = Math.max(
-      2,
-      lastRow - CONFIG.HISTORY_LIMIT + 1
-    );
+    function finish(error, result) {
+      if (finished) return;
 
-    const numberOfRows = lastRow - startRow + 1;
+      finished = true;
+      cleanup();
 
-    const data = sheet.getRange(
-      startRow, 1, numberOfRows, 7
-    ).getValues();
+      if (error) {
+        reject(error);
+      } else {
+        resolve(result);
+      }
+    }
 
-    const records = data.reverse().map(row => ({
-      id: String(row[0]),
-      equipmentName: row[1],
-      brand: row[2],
-      borrower: row[3],
-      borrowTime: formatTime(row[4]),
-      returner: row[5] || "",
-      returnTime: formatTime(row[6])
-    }));
-
-    return {
-      success: true,
-      records: records
+    window[callbackName] = function(result) {
+      finish(null, result);
     };
+
+    script.onerror = function() {
+      finish(new Error("無法連接 GAS，請確認部署網址"));
+    };
+
+    script.src = API_URL + "?" + query.toString();
+
+    document.body.appendChild(script);
+  });
+}
+
+
+/****************************************************
+ * 提交借用／歸還
+ ****************************************************/
+
+async function submitEquipment() {
+  if (processing) return;
+
+  const name = document
+    .getElementById("personName")
+    .value.trim();
+
+  const id = document
+    .getElementById("equipmentId")
+    .value.trim();
+
+  if (!name) {
+    showMessage("請先輸入姓名！", "error");
+    document.getElementById("personName").focus();
+    return;
+  }
+
+  if (!id) {
+    showMessage("請掃描 QR Code 或輸入設備編號！", "error");
+    document.getElementById("equipmentId").focus();
+    return;
+  }
+
+  if (!/^\d+$/.test(id)) {
+    showMessage("設備編號格式錯誤，請確認 QR Code 內容！", "error");
+    return;
+  }
+
+  await executeEquipment(id, name);
+}
+
+
+/****************************************************
+ * 執行借用／歸還
+ ****************************************************/
+
+async function executeEquipment(id, name) {
+  if (processing) return;
+
+  processing = true;
+
+  const submitBtn = document.getElementById("submitBtn");
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = "處理中...";
+
+  showMessage("正在處理，請稍候...", "info");
+
+  try {
+    const result = await callAPI({
+      action: currentMode,
+      id: id,
+      name: name
+    });
+
+    if (!result || !result.success) {
+      showMessage(
+        result && result.message
+          ? result.message
+          : "操作失敗，請稍後再試",
+        "error"
+      );
+
+      return;
+    }
+
+    // 更新設備資訊
+    updateEquipmentInfo(result);
+
+    // 顯示成功訊息
+    showMessage(result.message, "success");
+
+    // 更新紀錄
+    await loadHistory();
+
+    // 清空設備編號
+    document.getElementById("equipmentId").value = "";
 
   } catch (error) {
-    return {
-      success: false,
-      message: error.message || "讀取紀錄失敗",
-      records: []
-    };
+    showMessage(
+      error.message || "系統連線失敗",
+      "error"
+    );
 
   } finally {
-    if (lock.hasLock()) {
-      lock.releaseLock();
-    }
+    processing = false;
+    submitBtn.disabled = false;
+
+    submitBtn.textContent =
+      currentMode === "borrow"
+        ? "確認借用"
+        : "確認歸還";
   }
 }
 
 
 /****************************************************
- * 時間格式：台灣時間
+ * 更新設備資訊
  ****************************************************/
 
-function formatTime(value) {
-  if (!value) {
-    return "";
+function updateEquipmentInfo(data) {
+  document.getElementById("infoId").textContent =
+    data.id || "---";
+
+  document.getElementById("infoName").textContent =
+    data.equipmentName || "---";
+
+  document.getElementById("infoBrand").textContent =
+    data.brand || "---";
+
+  document.getElementById("infoPerson").textContent =
+    data.person || "---";
+
+  document.getElementById("infoTime").textContent =
+    data.time || "---";
+
+  const statusElement =
+    document.getElementById("infoStatus");
+
+  statusElement.textContent =
+    data.status || "---";
+
+  statusElement.className = "info-value";
+
+  if (data.status === "可借用") {
+    statusElement.classList.add("status-available");
+  } else if (data.status === "借出中") {
+    statusElement.classList.add("status-borrowed");
+  }
+}
+
+
+/****************************************************
+ * 啟動 QR Code 掃描
+ ****************************************************/
+
+async function startScanner() {
+  if (scannerRunning) return;
+
+  if (typeof Html5Qrcode === "undefined") {
+    showMessage("QR Code 掃描套件載入失敗，請重新整理頁面。", "error");
+    return;
   }
 
-  return Utilities.formatDate(
-    new Date(value),
-    CONFIG.TIMEZONE,
-    "yyyy/MM/dd HH:mm:ss"
-  );
+  try {
+    html5QrCode = new Html5Qrcode("reader");
+
+    await html5QrCode.start(
+      { facingMode: "environment" },
+      {
+        fps: 10,
+        qrbox: {
+          width: 250,
+          height: 250
+        }
+      },
+      onScanSuccess,
+      function() {
+        // 忽略尚未辨識成功的影像
+      }
+    );
+
+    scannerRunning = true;
+
+    document.getElementById("startBtn").disabled = true;
+    document.getElementById("stopBtn").disabled = false;
+
+    showMessage("相機已開啟，請將 QR Code 對準掃描框。", "info");
+
+  } catch (error) {
+    html5QrCode = null;
+
+    showMessage(
+      "無法開啟相機，請確認瀏覽器相機權限，並使用 HTTPS 網址。",
+      "error"
+    );
+  }
 }
+
+
+/****************************************************
+ * 關閉 QR Code 掃描
+ ****************************************************/
+
+async function stopScanner() {
+  if (!html5QrCode || !scannerRunning) return;
+
+  try {
+    await html5QrCode.stop();
+    await html5QrCode.clear();
+
+  } catch (error) {
+    console.error(error);
+
+  } finally {
+    html5QrCode = null;
+    scannerRunning = false;
+
+    document.getElementById("startBtn").disabled = false;
+    document.getElementById("stopBtn").disabled = true;
+  }
+}
+
+
+/****************************************************
+ * QR Code 掃描成功
+ ****************************************************/
+
+async function onScanSuccess(decodedText) {
+  const now = Date.now();
+
+  // 防止同一 QR Code 重複觸發
+  if (processing || now - lastScanTime < 2000) {
+    return;
+  }
+
+  lastScanTime = now;
+
+  const id = String(decodedText).trim();
+
+  if (!/^\d+$/.test(id)) {
+    showMessage("QR Code 內容不是有效的設備編號！", "error");
+    return;
+  }
+
+  // 自動填入設備編號
+  document.getElementById("equipmentId").value = id;
+
+  // 停止相機
+  await stopScanner();
+
+  // 自動執行借用／歸還
+  await submitEquipment();
+}
+
+
+/****************************************************
+ * 讀取借還紀錄
+ ****************************************************/
+
+async function loadHistory() {
+  const tbody = document.getElementById("historyBody");
+
+  tbody.innerHTML = `
+    <tr>
+      <td colspan="7" class="empty">正在載入紀錄...</td>
+    </tr>
+  `;
+
+  try {
+    const result = await callAPI({
+      action: "history"
+    });
+
+    if (!result || !result.success) {
+      throw new Error(
+        result && result.message
+          ? result.message
+          : "無法讀取紀錄"
+      );
+    }
+
+    renderHistory(result.records || []);
+
+  } catch (error) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="7" class="empty">
+          ${escapeHTML(error.message)}
+        </td>
+      </tr>
+    `;
+  }
+}
+
+
+/****************************************************
+ * 顯示借還紀錄
+ ****************************************************/
+
+function renderHistory(records) {
+  const tbody = document.getElementById("historyBody");
+
+  if (!records.length) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="7" class="empty">
+          目前尚無借還紀錄
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  tbody.innerHTML = records.map(record => `
+    <tr>
+      <td>${escapeHTML(record.id)}</td>
+      <td>${escapeHTML(record.equipmentName)}</td>
+      <td>${escapeHTML(record.brand)}</td>
+      <td>${escapeHTML(record.borrower)}</td>
+      <td>${escapeHTML(record.borrowTime)}</td>
+      <td>${escapeHTML(record.returner || "尚未歸還")}</td>
+      <td>${escapeHTML(record.returnTime || "尚未歸還")}</td>
+    </tr>
+  `).join("");
+}
+
+
+/****************************************************
+ * 網頁載入完成
+ ****************************************************/
+
+document.addEventListener("DOMContentLoaded", function() {
+  loadHistory();
+});
+
+</script>
+
+</body>
+</html>
